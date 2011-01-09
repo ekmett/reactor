@@ -9,3 +9,6 @@ class Filtered f where
 instance Filtered [] where
   filter = Prelude.filter
 
+instance Filtered Maybe where
+  filter p m@(Just a) | p a = m
+  filter _ _ = Nothing
