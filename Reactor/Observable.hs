@@ -3,7 +3,13 @@ module Reactor.Observable
   , never
   , fby
   , take, drop
+  , safe
   , filterMap, (!?)
+  , duplicateObservable
+  , extendObservable
+  , observe
+  , counted
+  -- , andThen
   , (<||>)
   -- , feed
   -- , head
@@ -17,8 +23,7 @@ import Control.Monad
 import Control.Monad.Error
 import Control.Monad.Reader
 import Control.Monad.Cont
-import Control.Monad.Trans
-import Data.Array.IO
+-- import Control.Monad.Trans
 import Data.Foldable
 import qualified Data.Foldable as Foldable
 import Data.Functor.Apply
@@ -26,10 +31,8 @@ import Data.Monoid
 import Data.IORef
 import Reactor.Atomic
 import Reactor.Contravariant
-import qualified Reactor.Deque as Deque
-import Reactor.Deque (Deque)
 import Reactor.Filtered
-import Reactor.Moore
+-- import Reactor.Moore
 import Reactor.Observer
 import Reactor.Task
 import Reactor.Subscription
@@ -54,7 +57,7 @@ filterMap p s = Observable $ \o -> subscribe s $ o ?! p
 (!?) = flip filterMap 
 
 never :: Observable a
-never = Observable $ \o -> return mempty
+never = Observable $ \_ -> return mempty
 
 fby :: a -> Observable a -> Observable a 
 fby a as = Observable $ \o -> do
@@ -100,16 +103,17 @@ instance FunctorApply Observable where
           when (i == 1) $ do
             j <- atomicFetch sf
             when (j == 0) $ complete o
-    subscribe_ mf
-      (\f -> io $ atomicModifyIORef funs (\fs -> (f:fs, ())))
-      (handle o)
-      (discard fflag aflag)
-    subscribe_ ma
-      (\a -> do
-        fs <- io $ readIORef funs 
-        spawn $ Foldable.mapM_ (\f -> o ! f a) fs)
-      (handle o)
-      (discard aflag fflag)
+    mappend 
+      <$> subscribe_ mf
+            (\f -> io $ atomicModifyIORef funs (\fs -> (f:fs, ())))
+            (handle o)
+            (discard fflag aflag)
+      <*> subscribe_ ma
+            (\a -> do
+              fs <- io $ readIORef funs 
+              spawn $ Foldable.mapM_ (\f -> o ! f a) fs)
+            (handle o)
+            (discard aflag fflag)
 
 -- | observe both in parallel
 (<||>) :: Observable a -> Observable a -> Observable a 
@@ -125,13 +129,13 @@ instance Monad Observable where
     counter <- atomic (1 :: Int)
     topFlag <- atomic (1 :: Int)
     let detach flag = do
-          clearing topFlag $ do
+          clearing flag $ do
             i <- atomicSubAndFetch counter 1
             when (i == 0) $ complete o
     subscribe_ mf 
       (\f -> do
         flag <- atomic (1 :: Int)
-        atomicAddAndFetch counter 1 
+        _ <- atomicAddAndFetch counter 1 
         () <$ subscribe_ (k f)
           (o !)
           (handle o)
@@ -183,11 +187,11 @@ counted p = Observable $ \o -> do
 
 -- do something when the observable completes
 
-andThen :: Observable a -> Task () -> Task Subscription
-andThen p t = spawn $ subscribe_ p
-    (\_ -> return ())
-    (\_ -> t)
-    t
+{-
+andThen :: Observable a -> Task () -> Task ()
+andThen p t = spawn $ do
+  () <$ subscribe_ p (\_ -> return ()) (\_ -> t) t
+-}
 
 {-
 

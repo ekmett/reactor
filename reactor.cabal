@@ -1,6 +1,6 @@
 name:          reactor
 category:      Concurrency
-version:       0.1.0
+version:       0.1.1
 license:       BSD3
 cabal-version: >= 1.2
 license-file:  LICENSE
@@ -29,8 +29,8 @@ library
     Reactor.Filtered
     Reactor.Moore
     Reactor.Observer
+    Reactor.Observable
     Reactor.Subscription
     Reactor.Task
 
--- Reactor.Observable
   ghc-options: -Wall 
