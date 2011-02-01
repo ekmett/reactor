@@ -2,7 +2,7 @@
 module Reactor.Atomic where
 
 import Control.Monad
-import Control.Monad.Trans
+import Control.Monad.IO.Class
 import Data.Bits.Atomic
 import Data.Data
 import Foreign.Ptr

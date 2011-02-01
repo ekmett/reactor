@@ -9,10 +9,10 @@ import Control.Monad
 import Control.Exception hiding (handle)
 import Control.Monad.Error
 import Data.Monoid
-import Reactor.Contravariant
+import Data.Functor.Contravariant
+import Data.Data
 import Reactor.Filtered
 import Reactor.Task
-import Data.Data
 
 data Observer a = Observer 
   { (!)      :: a -> Task ()

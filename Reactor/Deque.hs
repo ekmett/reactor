@@ -30,7 +30,7 @@ import Foreign.Storable
 import Data.IORef
 import Data.Array.MArray
 import Control.Monad
-import Control.Monad.Trans
+import Control.Monad.IO.Class
 import Data.Data
 import System.IO.Unsafe
 

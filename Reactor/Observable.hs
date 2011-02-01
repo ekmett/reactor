@@ -5,8 +5,6 @@ module Reactor.Observable
   , take, drop
   , safe
   , filterMap, (!?)
-  , duplicateObservable
-  , extendObservable
   , observe
   , counted
   -- , andThen
@@ -21,23 +19,103 @@ import Control.Applicative
 import Control.Exception hiding (handle)
 import Control.Monad
 import Control.Monad.Error
-import Control.Monad.Reader
-import Control.Monad.Cont
--- import Control.Monad.Trans
 import Data.Foldable
 import qualified Data.Foldable as Foldable
-import Data.Functor.Apply
+import Data.Functor.Bind
+import Data.Functor.Plus
+import Data.Functor.Extend
+import Data.Functor.Contravariant
 import Data.Monoid
 import Data.IORef
 import Reactor.Atomic
-import Reactor.Contravariant
 import Reactor.Filtered
--- import Reactor.Moore
 import Reactor.Observer
 import Reactor.Task
 import Reactor.Subscription
 
 newtype Observable a = Observable { subscribe :: Observer a -> Task Subscription }
+
+instance Functor Observable where
+  fmap f s = Observable (subscribe s . contramap f)
+
+instance Apply Observable where
+  mf <.> ma = Observable $ \o -> do
+    funs <- io $ newIORef []
+    fflag <- atomic (1 :: Int)
+    aflag <- atomic (1 :: Int)
+    let discard pf sf = do
+          i <- atomicFetchAndAnd pf 0
+          when (i == 1) $ do
+            j <- atomicFetch sf
+            when (j == 0) $ complete o
+    mappend 
+      <$> subscribe_ mf
+            (\f -> io $ atomicModifyIORef funs (\fs -> (f:fs, ())))
+            (handle o)
+            (discard fflag aflag)
+      <*> subscribe_ ma
+            (\a -> do
+              fs <- io $ readIORef funs 
+              spawn $ Foldable.mapM_ (\f -> o ! f a) fs)
+            (handle o)
+            (discard aflag fflag)
+
+instance Filtered Observable where
+  filter p s = Observable (subscribe s . filter p)
+
+instance Applicative Observable where
+  pure a = Observable $ \o -> (o ! a) *> complete o $> mempty 
+  (<*>) = (<.>)
+
+instance Bind Observable where
+  mf >>- k = Observable $ \o -> do
+    counter <- atomic (1 :: Int)
+    topFlag <- atomic (1 :: Int)
+    let detach flag = do
+          clearing flag $ do
+            i <- atomicSubAndFetch counter 1
+            when (i == 0) $ complete o
+    subscribe_ mf 
+      (\f -> do
+        flag <- atomic (1 :: Int)
+        _ <- atomicAddAndFetch counter 1 
+        () <$ subscribe_ (k f)
+          (o !)
+          (handle o)
+          (detach flag))
+      (handle o)
+      (detach topFlag)
+        
+instance Monad Observable where
+  return = pure
+  (>>=) = (>>-)
+
+instance Alt Observable where
+  a <!> b = Observable $ \o -> subscribe_ a
+    (o !)
+    (handle o)
+    (subscribe b o $> ())
+
+instance Plus Observable where
+  zero = Observable (\o -> complete o $> mempty)
+  
+instance Alternative Observable where
+  empty = zero
+  (<|>) = (<!>)
+
+instance MonadPlus Observable where
+  mzero = zero
+  mplus = (<!>)
+
+instance Extend Observable where
+  duplicate p = Observable $ \o -> subscribe_ p 
+    (\a -> o ! fby a p)
+    (handle o) 
+    (complete o)
+  extend f p = Observable $ \o -> subscribe_ p 
+    (\a -> o ! f (fby a p))
+    (handle o)
+    (complete o)
 
 safe :: Observable a -> Observable a 
 safe p = Observable $ \o -> do
@@ -87,85 +165,9 @@ drop n p = Observable $ \o -> do
     (handle o)
     (complete o)
 
-instance Filtered Observable where
-  filter p s = Observable (subscribe s . filter p)
-  
-instance Functor Observable where
-  fmap f s = Observable (subscribe s . contramap f)
-
-instance FunctorApply Observable where
-  mf <.> ma = Observable $ \o -> do
-    funs <- io $ newIORef []
-    fflag <- atomic (1 :: Int)
-    aflag <- atomic (1 :: Int)
-    let discard pf sf = do
-          i <- atomicFetchAndAnd pf 0
-          when (i == 1) $ do
-            j <- atomicFetch sf
-            when (j == 0) $ complete o
-    mappend 
-      <$> subscribe_ mf
-            (\f -> io $ atomicModifyIORef funs (\fs -> (f:fs, ())))
-            (handle o)
-            (discard fflag aflag)
-      <*> subscribe_ ma
-            (\a -> do
-              fs <- io $ readIORef funs 
-              spawn $ Foldable.mapM_ (\f -> o ! f a) fs)
-            (handle o)
-            (discard aflag fflag)
-
--- | observe both in parallel
+-- | Observe both at the same time.
 (<||>) :: Observable a -> Observable a -> Observable a 
 p <||> q = Observable $ \o -> mappend <$> subscribe p o <*> subscribe q o
-
-instance Applicative Observable where
-  pure a = Observable $ \o -> (o ! a) *> complete o $> mempty 
-  (<*>) = (<.>)
-        
-instance Monad Observable where
-  return a = Observable $ \o -> (o ! a) *> complete o $> mempty
-  mf >>= k = Observable $ \o -> do
-    counter <- atomic (1 :: Int)
-    topFlag <- atomic (1 :: Int)
-    let detach flag = do
-          clearing flag $ do
-            i <- atomicSubAndFetch counter 1
-            when (i == 0) $ complete o
-    subscribe_ mf 
-      (\f -> do
-        flag <- atomic (1 :: Int)
-        _ <- atomicAddAndFetch counter 1 
-        () <$ subscribe_ (k f)
-          (o !)
-          (handle o)
-          (detach flag))
-      (handle o)
-      (detach topFlag)
-
-instance Alternative Observable where
-  empty = Observable (\o -> complete o $> mempty)
-  a <|> b = Observable $ \o -> subscribe_ a
-    (o !)
-    (handle o)
-    (subscribe b o $> ())
-
-instance MonadPlus Observable where
-  mzero = empty
-  mplus = (<|>)
-
-duplicateObservable :: Observable a -> Observable (Observable a)
-duplicateObservable p = Observable $ \o -> subscribe_ p 
-  (\a -> o ! fby a p)
-  (handle o) 
-  (complete o)
-
-extendObservable :: (Observable a -> b) -> Observable a -> Observable b
-extendObservable f p = Observable $ \o -> subscribe_ p 
-  (\a -> o ! f (fby a p))
-  (handle o)
-  (complete o)
-
 
 observe :: Foldable f => f a -> Observable a
 observe t = Observable $ \o -> do
@@ -173,7 +175,6 @@ observe t = Observable $ \o -> do
     Foldable.forM_ t (o !)
     complete o
   return mempty
-
 
 counted :: Observable a -> Observable (Int, a)
 counted p = Observable $ \o -> do
